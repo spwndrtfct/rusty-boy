@@ -34,6 +34,12 @@ use log4rs::append::console::ConsoleAppender;
 use log4rs::encode::pattern::PatternEncoder;
 use log4rs::config::{Appender, Config, Root};
 
+#[cfg(feature = "cosmic_rays")]
+extern crate rand;
+#[cfg(feature = "cosmic_rays")]
+use rand::Rng;
+
+
 use sdl2::keyboard::Keycode;
 
 pub const NICER_COLOR: sdl2::pixels::Color = sdl2::pixels::Color::RGBA(139, 41, 2, 255);
@@ -47,32 +53,51 @@ fn main() {
 
 
     // Command line arguments
-    let matches = App::new("rusty-boy")
+    
+    let app = App::new("rusty-boy")
         .version("-0.1")
         .author("Mark McCaskey and friends")
         .about("Kappa")
         .arg(Arg::with_name("game")
-            .short("g")
-            .long("game")
-            .value_name("FILE")
-            .help("Specifies ROM to load")
-            .required(true)
-            .index(1)
-            .takes_value(true))
+             .short("g")
+             .long("game")
+             .value_name("FILE")
+             .help("Specifies ROM to load")
+             .required(true)
+             .index(1)
+             .takes_value(true))
         .arg(Arg::with_name("debug")
-            .short("d")
-            .multiple(true)
-            .long("debug")
-            .help("Runs in step-by-step debug mode")
-            .takes_value(false))
+             .short("d")
+             .multiple(true)
+             .long("debug")
+             .help("Runs in step-by-step debug mode")
+             .takes_value(false))
         .arg(Arg::with_name("trace")
-            .short("t")
-            .multiple(true)
-            .long("trace")
-            .help("Runs with verbose trace")
-            .takes_value(false))
-        .get_matches();
+             .short("t")
+             .multiple(true)
+             .long("trace")
+             .help("Runs with verbose trace")
+             .takes_value(false));
+    
+    #[cfg(feature = "cosmic_rays")]
+    let app = app.arg(Arg::with_name("cosmic-rays")
+                      .long("cosmic-rays")
+                      .help("Enable memory-damaging rays simulation")
+                      .takes_value(true));
 
+    // Parse cmdline arguments
+    let matches = app.get_matches();
+
+    #[cfg(feature = "cosmic_rays")]
+    let mut ray_probability: u64 = match matches.value_of("cosmic-rays") {
+        Some(string) => {
+            let v = string.parse().expect("Expecting number");
+            v
+        }
+        None => 0,
+    };
+    #[cfg(feature = "cosmic_rays")]
+    let mut next_ray: u64 = rand::random::<u64>() % ray_probability;
 
     let config = Config::builder()
         .appender(Appender::builder().build("stdout", Box::new(stdout)))
@@ -289,6 +314,19 @@ fn main() {
             }
         }
 
+        #[cfg(feature = "cosmic_rays")]
+        {
+            if ray_probability != 0 && next_ray < cycle_count {
+                let addr: u16 = rand::random();
+                let bit: u8 = rand::random::<u8>() % 8;
+
+                let v = gameboy.mem[addr as usize];
+                gameboy.mem[addr as usize] = v ^ (1 << bit);
+                next_ray = cycle_count.wrapping_add(rand::random::<u64>() % ray_probability);
+            }
+        }
+    
+        
         // Gameboy screen is 256x256
         // only 160x144 are displayed at a time
         //

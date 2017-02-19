@@ -246,6 +246,19 @@ impl ApplicationState {
                             // gameboy = Cpu::new();
                             // gameboy.load_rom(rom_file);
                         }
+                        Keycode::A => { self.gameboy.press_a(); },
+                        Keycode::S => { self.gameboy.press_b() },
+                        Keycode::D => { self.gameboy.press_select() },
+                        Keycode::F => { self.gameboy.press_start() },
+                        _ => (),
+                    }
+                }
+                Event::KeyUp { keycode: Some(keycode), .. } => {
+                    match keycode {
+                        Keycode::A => { self.gameboy.unpress_a(); },
+                        Keycode::S => { self.gameboy.unpress_b() },
+                        Keycode::D => { self.gameboy.unpress_select() },
+                        Keycode::F => { self.gameboy.unpress_start() },
                         _ => (),
                     }
                 }

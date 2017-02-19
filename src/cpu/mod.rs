@@ -539,6 +539,13 @@ impl Cpu {
             } else {old_val.wrapping_add(1)};
     }
 
+    fn process_serial_debug(&mut self, value: byte) {
+        let c = self.mem[0xFF01];
+        println!("Serial: '{}' 0x{:02X}", c as char, c);
+        //print!("{}", c as char);
+        // TODO reset Serial control bits?
+    }
+
 
     set_interrupt_bit!(set_vblank_interrupt_bit, 0x1);
     set_interrupt_bit!(set_lcdc_interrupt_bit, 0x2);
@@ -976,6 +983,8 @@ impl Cpu {
                     self.mem[ad ^ (0xE000 - 0xC000)] = value;
                 },
 
+            0xFF01 => self.mem[0xFF01] = value,
+            0xFF02 => { self.mem[0xFF02] = value; self.process_serial_debug(value) },
             0xFF04 => self.mem[0xFF04] = 0,
             // TODO: Check whether vblank should be turned off on
             // writes to 0xFF44

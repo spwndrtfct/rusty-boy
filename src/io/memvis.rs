@@ -74,13 +74,13 @@ impl Drawable for MemVisState {
 
             let txt_format = sdl2::pixels::PixelFormatEnum::RGBA8888;
 
-            // FIXME This copy is here to please the Borrow Checker
-            // God and ideally needs to be removed.
-            let mut copy = [0; EVENT_LOGGER_TEXTURE_SIZE];
-            copy[..].clone_from_slice(&logger.access_times[..]);
+            // // FIXME This copy is here to please the Borrow Checker
+            // // God and ideally needs to be removed.
+            // let mut copy = [0; EVENT_LOGGER_TEXTURE_SIZE];
+            // copy[..].clone_from_slice(&logger.access_times[..]);
 
             // Create Surface from values stored in logger
-            let mut surface = Surface::from_data(&mut copy,
+            let mut surface = Surface::from_data(&logger.access_times[..],
                                                  MEM_DISP_WIDTH as u32,
                                                  MEM_DISP_HEIGHT as u32,
                                                  memvis_pitch as u32,
@@ -103,12 +103,12 @@ impl Drawable for MemVisState {
             // Do the actual fading effect
             blend.blit(None, &mut surface, None).unwrap();
 
-            // Store faded values back into logger
-            // NOTE sizes of textures differ from EVENT_LOGGER_TEXTURE_SIZE
-            // FIXME there must be a better way to do this without copying
-            surface.with_lock(|pixels| {
-                    logger.access_times[0..pixels.len()].clone_from_slice(&pixels[0..pixels.len()])
-            });
+            // // Store faded values back into logger
+            // // NOTE sizes of textures differ from EVENT_LOGGER_TEXTURE_SIZE
+            // // FIXME there must be a better way to do this without copying
+            // surface.with_lock(|pixels| {
+            //         logger.access_times[0..pixels.len()].clone_from_slice(&pixels[0..pixels.len()])
+            // });
 
             // Add access_time texture to make recent accesses brigher
             let mut blend_texture = renderer.create_texture_from_surface(surface).unwrap();

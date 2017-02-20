@@ -22,7 +22,8 @@ version = "0.12.4"
 
 [dependencies]
 clap = "2"
-sdl2 = "0.27"
+#sdl2 = "0.27"
+sdl2 = { git = "https://github.com/markmccaskey/rust-sdl2" }
 log = "0.3.6"
 log4rs = "0.5.2"
 ncurses = "5.85.0"

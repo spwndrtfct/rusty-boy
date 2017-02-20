@@ -765,7 +765,7 @@ impl Cpu {
     fn dma(&mut self) {
         let addr = (self.mem[0xFF46] as MemAddr) << 8;
         
-        for i in 0..0x9A { //number of values to be copied
+        for i in 0..0xA0 { //number of values to be copied
             let val = self.mem[(addr + i) as usize];
             self.mem[(0xFE00 + i) as usize] = val; //start addr + offset
         }
@@ -863,7 +863,8 @@ impl Cpu {
 
     fn set_af(&mut self, v:u16) {
         self.a = ((v >> 8) & 0xFF) as byte;
-        self.f = (v & 0xFF) as byte;
+        // lower 4 bits are always zero
+        self.f = (v & 0xF0) as byte;
     }
 
     fn hl(&self) -> u16 {
@@ -1152,7 +1153,10 @@ impl Cpu {
 
     fn ldnnsp(&mut self, b1: u8, b2: u8) {
         let old_sp = self.sp;
-        self.set_mem((((b2 as u16) << 8) | (b1 as u16)), old_sp as byte);
+        let addr = byte_to_u16(b1, b2);
+        // TODO function to write word (16 bit) to memory
+        self.set_mem(addr, old_sp as byte & 0xFFu8);
+        self.set_mem(addr.wrapping_add(1), ((old_sp >> 8) as byte & 0xFFu8) as byte);
     }
 
     // fn pushnn(&mut self, nn: CpuRegister16) {
@@ -1690,9 +1694,7 @@ impl Cpu {
     //TODO: Double check (HL) HL thing
     fn jphl(&mut self) {
         let old_pc = self.pc;
-        let hl = self.hl();
-        let n = self.get_mem(hl);
-        let new_pc = add_u16_i8(old_pc, n as i8);
+        let new_pc = self.hl();
 
         if let Some(ref mut logger) = self.event_logger {
             logger.log_jump(self.cycles, old_pc, new_pc);

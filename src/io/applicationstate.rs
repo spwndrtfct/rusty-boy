@@ -44,8 +44,62 @@ pub struct ApplicationState {
     ui_scale: f32,
     ui_offset: Point, // TODO whole interface pan
     widgets: Vec<PositionedFrame>,
+    timer_subsystem: sdl2::TimerSubsystem,
+    fps_counter: FpsCounter,
 }
 
+/// Number of frame times to get average fps for
+const NUM_FRAME_VALUES: u64 = 10;
+
+struct FpsCounter {
+    /// Values of frame times to get average fps
+    frame_lengths: [u64; NUM_FRAME_VALUES as usize],
+    /// System timer ticks frequency
+    timer_freq: u64,
+    /// Ticks for last frame
+    last_frame_time: u64,
+    /// Number of frames counted
+    framecount: u64,
+    /// Last time fps were printed
+    last_display_time: u64,
+}
+
+/// Simple functions for counting fps
+impl FpsCounter {
+    pub fn new(timer_freq: u64, initial_time: u64) -> FpsCounter {
+        FpsCounter {
+            frame_lengths: [0; NUM_FRAME_VALUES as usize],
+            last_frame_time: initial_time,
+            timer_freq: timer_freq,
+            framecount: 0,
+            last_display_time: 0,
+        }
+    }
+
+    /// Update array of frame times
+    pub fn update_fps_count(&mut self, cur_ticks: u64) {
+        let frame_idx = (self.framecount % NUM_FRAME_VALUES) as usize;
+        self.frame_lengths[frame_idx] = cur_ticks - self.last_frame_time;
+        self.last_frame_time = cur_ticks;
+        self.framecount = self.framecount.wrapping_add(1);
+    }
+
+    /// Current average frame time in system ticks
+    pub fn get_avg_frame_time(&self) -> f32 {
+        let sum: u64 = self.frame_lengths.iter().sum();
+        sum as f32 / NUM_FRAME_VALUES as f32
+    }
+
+    /// Prints current average fps count periodically
+    pub fn maybe_print_fps(&mut self, cur_ticks: u64) {
+        let fps_disp_delay = (cur_ticks - self.last_display_time);
+        // Print value every second
+        if fps_disp_delay > self.timer_freq {
+            info!("FPS: {}", 1.0 / (self.get_avg_frame_time() / self.timer_freq as f32));
+            self.last_display_time = cur_ticks;
+        }
+    }
+}
 
 
 impl ApplicationState {
@@ -83,6 +137,11 @@ impl ApplicationState {
         gameboy.load_rom(rom_file_name);
 
         let sdl_context = sdl2::init().unwrap();
+
+        let timer_subsystem = sdl_context.timer().unwrap();
+        let freq = timer_subsystem.performance_frequency();
+        let initial_time = timer_subsystem.performance_counter();
+
         let device = setup_audio(&sdl_context);
         let controller = setup_controller_subsystem(&sdl_context);
 
@@ -164,6 +223,8 @@ impl ApplicationState {
             ui_scale: SCALE,
             ui_offset: Point::new(0, 0),
             widgets: widgets,
+            timer_subsystem: timer_subsystem,
+            fps_counter: FpsCounter::new(freq, initial_time),
         }
     }
 
@@ -400,6 +461,11 @@ impl ApplicationState {
 
 
             self.renderer.present();
+
+
+            let cur_ticks = self.timer_subsystem.performance_counter();
+            self.fps_counter.update_fps_count(cur_ticks);
+            self.fps_counter.maybe_print_fps(cur_ticks);
         }
     }
 }

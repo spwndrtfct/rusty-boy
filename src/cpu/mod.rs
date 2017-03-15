@@ -568,12 +568,13 @@ impl Cpu {
     }
 
     fn process_serial_debug(&mut self, value: byte) {
-        let c = self.mem[0xFF01];
-        println!("Serial: '{}' 0x{:02X}", c as char, c);
-        //print!("{}", c as char);
-        // TODO reset Serial control bits?
+        if value == 0x81 { // this works for testing roms but it's wrong
+            let c = self.mem[0xFF01];
+            print!("{}", c as char);
+            // FIXME bit should be after transfer is complete
+            self.mem[0xFF02] = value & !0x80; // this is pointless now
+        }
     }
-
 
     set_interrupt_bit!(set_vblank_interrupt_bit, 0x1);
     set_interrupt_bit!(set_lcdc_interrupt_bit, 0x2);
@@ -1090,8 +1091,10 @@ impl Cpu {
                     self.mem[0xFF00] = value | (self.input_state & 0x0F);
                 }
             }
+            // Serial output
             0xFF01 => self.mem[0xFF01] = value,
             0xFF02 => { self.mem[0xFF02] = value; self.process_serial_debug(value) },
+            // Timer Divider (DIV)
             0xFF04 => self.mem[0xFF04] = 0,
             // TODO: Check whether vblank should be turned off on
             // writes to 0xFF44

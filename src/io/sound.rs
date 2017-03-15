@@ -56,7 +56,7 @@ pub fn setup_audio(sdl_context: &sdl2::Sdl) -> AudioDevice<Wave> {
 
     audio_subsystem.open_playback(None, &desired_spec, |spec| {
             // Show obtained AudioSpec
-            println!("{:?}", spec);
+            info!("{:?}", spec);
 
             // initialize the audio callback
             Wave {

@@ -21,7 +21,7 @@ use io::vidram::{VidRamBGDisplay, VidRamTileDisplay};
 use io::sound::*;
 
 use log::LogLevelFilter;
-use log4rs::append::console::ConsoleAppender;
+use log4rs::append::console::{ConsoleAppender, Target};
 use log4rs::encode::pattern::PatternEncoder;
 use log4rs::config::{Appender, Config, Root};
 
@@ -119,6 +119,7 @@ impl ApplicationState {
         // Set up logging
         let stdout = ConsoleAppender::builder()
             .encoder(Box::new(PatternEncoder::new("{h({l})} {m} {n}")))
+            .target(log4rs::append::console::Target::Stderr)
             .build();
 
         let config = Config::builder()

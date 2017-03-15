@@ -1,15 +1,15 @@
 customize zone (m-x find-variable zone-programs) Kappa
 
-* TODO CPU[66%]
+* TODO CPU[100%]
 ** DONE Dispatch
 *** DONE Prefixed
 *** DONE Unprefixed
 *** KNOWNCAUSE DMA 
     Currently it's 'instanteous', should take 140ns or whatever the
     doc says it should
-** TODO Interrupts
-*** TODO Throw
-*** TODO Handle
+** DONE Interrupts
+*** DONE Throw
+*** DONE Handle
 ** DONE Opcodes[100%]
    (Note review serial IO)
 *** DONE Loads
@@ -20,8 +20,8 @@ customize zone (m-x find-variable zone-programs) Kappa
 **** DONE 8bit
 **** DONE 16bit
 *** DONE Control flow
-** TODO Tests!
-*** TODO opcodes
+** DONE Tests!
+*** DONE opcodes
 ** DONE Split CPU into multiple files
 ** DONE Special Registers!![100%]
 *** DONE Sound
@@ -43,23 +43,23 @@ customize zone (m-x find-variable zone-programs) Kappa
 **** TODO Zooming
 **** TODO In line information
 * TODO Input[0%]
-** TODO Controller input[0%]
-*** TODO SNES
+** TODO Controller input[33%]
+*** DONE SNES
 **** DONE Buttons
-**** TODO Dpad
+**** DONE Dpad
 *** TODO General handling
 *** TODO Remapping
 ** TODO Keyboard
-*** TODO General handling
+*** DONE General handling
 *** TODO Remapping
-* TODO Tools[0%]
+* TODO Tools[33%]
 ** TODO Assembler[80%]
 *** DONE Instruction translation
 *** CANCELED Pseudo-instructions?
 *** CANCELED Automate or use default values to make it easier
 *** TODO Address resolution
 *** CANCELED Name substitution
-** TODO Disassembler[100%]
+** DONE Disassembler[100%]
 *** DONE Generate text
 *** DONE Resolve relative jumps
 *** CANCELED Needs to trace through program
@@ -87,7 +87,8 @@ customize zone (m-x find-variable zone-programs) Kappa
 **** TODO Values
      Search memory (possibly through time if persistence is done) to
      report information about the manner in which the ROM is executing
-* TODO Improve code quality[66%]
+* DONE Improve code quality[100%]
 ** DONE Fix all warnings
 ** DONE Type annotate literals
-** TODO abstract logic in main
+** DONE abstract logic in main
+   

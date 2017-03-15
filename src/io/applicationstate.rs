@@ -38,8 +38,14 @@ pub struct ApplicationState {
     cycle_count: u64,
     prev_time: u64,
     debugger: Option<Debugger>,
+    /// counts cycles for hsync updates
     prev_hsync_cycles: u64,
-    clock_cycles: u64,
+    /// counts cycles since last timer update
+    timer_cycles: u64,
+    /// counts cycles since last divider register update
+    div_timer_cycles: u64,
+    /// counts cycles since last sound update
+    sound_cycles: u64,
     initial_gameboy_state: cpu::Cpu,
     logger_handle: Option<log4rs::Handle>, // storing to keep alive
     controller: Option<sdl2::controller::GameController>, // storing to keep alive
@@ -116,29 +122,31 @@ impl ApplicationState {
         let config = Config::builder()
             .appender(Appender::builder().build("stdout", Box::new(stdout)))
             .build(Root::builder().appender("stdout").build(if trace_mode {
-                LogLevelFilter::Trace
-            } else {
-                LogLevelFilter::Debug
-            }))
+                                                                LogLevelFilter::Trace
+                                                            } else {
+                                                                LogLevelFilter::Debug
+                                                            }))
             .unwrap();
 
+        
         // Set up debugging or command-line logging
-        let (debugger, handle) = if debug_mode && cfg!(feature = "debugger") {
+        let (should_debugger, handle) = if debug_mode && cfg!(feature = "debugger") {
             info!("Running in debug mode");
-            // Some(Debugger::new(&mut gameboy))
-            (None, None)
+            (true, None)
         } else {
             let handle = log4rs::init_config(config).unwrap();
-            (None, Some(handle))
+            (false, Some(handle))
         };
-
 
         // Set up gameboy and other state
         let mut gameboy = cpu::Cpu::new();
-
         trace!("loading ROM");
         gameboy.load_rom(rom_file_name);
 
+        //delay debugger so loading rom can be logged if need be
+        let debugger = if should_debugger { Some(Debugger::new(&gameboy)) }
+        else {None};
+        
         let sdl_context = sdl2::init().unwrap();
 
         let timer_subsystem = sdl_context.timer().unwrap();
@@ -152,8 +160,8 @@ impl ApplicationState {
         trace!("Opening window");
         let video_subsystem = sdl_context.video().unwrap();
         let window = video_subsystem.window(gameboy.get_game_name().as_str(),
-                    RB_SCREEN_WIDTH,
-                    RB_SCREEN_HEIGHT)
+                                            RB_SCREEN_WIDTH,
+                                            RB_SCREEN_HEIGHT)
             .position_centered()
             .build()
             .unwrap();
@@ -216,9 +224,12 @@ impl ApplicationState {
             renderer: renderer,
             cycle_count: 0,
             prev_time: 0,
+            // FIXME sound_cycles is probably wrong or not needed
+            sound_cycles: 0,
             debugger: debugger,
             prev_hsync_cycles: 0,
-            clock_cycles: 0,
+            timer_cycles: 0,
+            div_timer_cycles: 0,
             initial_gameboy_state: gbcopy,
             logger_handle: handle,
             controller: controller,
@@ -242,21 +253,46 @@ impl ApplicationState {
     /// Handles both controller input and keyboard/mouse debug input
     /// NOTE: does not handle input for ncurses debugger
     pub fn handle_events(&mut self) {
-        for event in self.sdl_context.event_pump().unwrap().poll_iter() {
+        for event in self.sdl_context
+                .event_pump()
+                .unwrap()
+                .poll_iter() {
             use sdl2::event::Event;
 
             match event {
                 Event::ControllerAxisMotion { axis, value: val, .. } => {
-                    let dead_zone = 10000;
-                    if val > dead_zone || val < -dead_zone {
-                        debug!("Axis {:?} moved to {}", axis, val);
-                        //                   match axis {
-                        // controller::Axis::LeftX =>,
-                        // controller::Axis::LeftY =>,
-                        // _ => (),
-                        // }
-                        //
+                    let deadzone = 10000;
+                    debug!("Axis {:?} moved to {}", axis, val);
+                    match axis {
+                        controller::Axis::LeftX if deadzone < (val as i32).abs() => {
+                            if val < 0 {
+                                self.gameboy.press_left();
+                                self.gameboy.unpress_right();
+                            } else {
+                                self.gameboy.press_right();
+                                self.gameboy.unpress_left();
+                            };
+                        }
+                        controller::Axis::LeftX => {
+                            self.gameboy.unpress_left();
+                            self.gameboy.unpress_right();
+                        }
+                        controller::Axis::LeftY if deadzone < (val as i32).abs() => {
+                            if val < 0 {
+                                self.gameboy.press_up();
+                                self.gameboy.unpress_down();
+                            } else {
+                                self.gameboy.press_down();
+                                self.gameboy.unpress_up();
+                            }
+                        }
+                        controller::Axis::LeftY => {
+                            self.gameboy.unpress_up();
+                            self.gameboy.unpress_down();
+                        }
+                        _ => {}
                     }
+
                 }
                 Event::ControllerButtonDown { button, .. } => {
                     debug!("Button {:?} down", button);
@@ -278,8 +314,6 @@ impl ApplicationState {
                     match button {
                         controller::Button::A => {
                             self.gameboy.unpress_a();
-                            // TODO: sound
-                            // device.pause();
                         }
                         controller::Button::B => self.gameboy.unpress_b(),
                         controller::Button::Back => self.gameboy.unpress_select(),
@@ -306,21 +340,21 @@ impl ApplicationState {
                                 let gbcopy = self.initial_gameboy_state.clone();
                                 self.gameboy = gbcopy;
                                 self.gameboy.reinit_logger();
-                                
+
                                 // // This way makes it possible to edit rom
                                 // // with external editor and see changes
                                 // // instantly.
                                 // gameboy = Cpu::new();
-                            // gameboy.load_rom(rom_file);
+                                // gameboy.load_rom(rom_file);
                             }
-                            Keycode::A => { self.gameboy.press_a() },
-                            Keycode::S => { self.gameboy.press_b() },
-                            Keycode::D => { self.gameboy.press_select() },
-                            Keycode::F => { self.gameboy.press_start() },
-                            Keycode::Up => { self.gameboy.press_up() },
-                            Keycode::Down => { self.gameboy.press_down() },
-                            Keycode::Left => { self.gameboy.press_left() },
-                            Keycode::Right => { self.gameboy.press_right() },
+                            Keycode::A => self.gameboy.press_a(),
+                            Keycode::S => self.gameboy.press_b(),
+                            Keycode::D => self.gameboy.press_select(),
+                            Keycode::F => self.gameboy.press_start(),
+                            Keycode::Up => self.gameboy.press_up(),
+                            Keycode::Down => self.gameboy.press_down(),
+                            Keycode::Left => self.gameboy.press_left(),
+                            Keycode::Right => self.gameboy.press_right(),
                             _ => (),
                         }
                     }
@@ -328,14 +362,14 @@ impl ApplicationState {
                 Event::KeyUp { keycode: Some(keycode), repeat, .. } => {
                     if !repeat {
                         match keycode {
-                            Keycode::A => { self.gameboy.unpress_a() },
-                            Keycode::S => { self.gameboy.unpress_b() },
-                            Keycode::D => { self.gameboy.unpress_select() },
-                            Keycode::F => { self.gameboy.unpress_start() },
-                            Keycode::Up => { self.gameboy.unpress_up() },
-                            Keycode::Down => { self.gameboy.unpress_down() },
-                            Keycode::Left => { self.gameboy.unpress_left() },
-                            Keycode::Right => { self.gameboy.unpress_right() },
+                            Keycode::A => self.gameboy.unpress_a(),
+                            Keycode::S => self.gameboy.unpress_b(),
+                            Keycode::D => self.gameboy.unpress_select(),
+                            Keycode::F => self.gameboy.unpress_start(),
+                            Keycode::Up => self.gameboy.unpress_up(),
+                            Keycode::Down => self.gameboy.unpress_down(),
+                            Keycode::Left => self.gameboy.unpress_left(),
+                            Keycode::Right => self.gameboy.unpress_right(),
 
                             _ => (),
                         }
@@ -346,7 +380,7 @@ impl ApplicationState {
                     let click_point = self.display_coords_to_ui_point(x, y);
 
                     // Find clicked widget
-                    for widget in self.widgets.iter_mut() {
+                    for widget in &mut self.widgets {
                         if widget.rect.contains(click_point) {
                             widget.click(mouse_btn, click_point, &mut self.gameboy);
                             break;
@@ -381,25 +415,26 @@ impl ApplicationState {
         };
 
         self.cycle_count += current_op_time;
-        self.clock_cycles += current_op_time;
-        let timer_khz = self.gameboy.timer_frequency();
-        let time_in_ms_per_cycle = (1000.0 / ((timer_khz as f64) * 1000.0)) as u64;
-        self.clock_cycles += self.cycle_count;
 
-        // TODO: remove prev_time
-        let prev_time = self.prev_time;
-        let ticks = self.cycle_count - prev_time;
+        // FF04 (DIV) Divider Register stepping
+        self.div_timer_cycles += current_op_time;
+        if self.div_timer_cycles >= CPU_CYCLES_PER_DIVIDER_STEP {
+            self.gameboy.inc_div();
+            self.div_timer_cycles -= CPU_CYCLES_PER_DIVIDER_STEP;
+        }
 
-        let time_in_cpu_cycle_per_cycle =
-            ((time_in_ms_per_cycle as f64) / (1.0 / (4.19 * 1000.0 * 1000.0))) as u64;
-
-        if self.clock_cycles >= time_in_cpu_cycle_per_cycle {
+        // FF05 (TIMA) Timer counter stepping
+        self.timer_cycles += current_op_time;
+        let timer_hz = self.gameboy.timer_frequency_hz();
+        let cpu_cycles_per_timer_counter_step = (CPU_CYCLES_PER_SECOND as f64 / ((timer_hz as f64))) as u64;
+        if self.timer_cycles >= cpu_cycles_per_timer_counter_step {
             //           std::thread::sleep_ms(16);
             // trace!("Incrementing the timer!");
             self.gameboy.timer_cycle();
-            self.clock_cycles = 0;
+            self.timer_cycles -= cpu_cycles_per_timer_counter_step;
         }
 
+        // Faking hsync to get the games running
         let fake_display_hsync = true;
         if fake_display_hsync {
             // update LY respective to cycles spent execing instruction
@@ -433,10 +468,37 @@ impl ApplicationState {
             Err(_) => error!("Could not set render scale"),
         }
 
+        let sound_upper_limit =
+            ((CPU_CYCLES_PER_SECOND as f32) / self.gameboy.channel1_sweep_time()) as u64;
+
+        if self.sound_cycles >= sound_upper_limit {
+            self.sound_cycles -= sound_upper_limit;
+            
+            if self.gameboy.get_sound1() {
+                self.sound_system.resume();
+            } else {
+                self.sound_system.pause();
+            }
+
+
+            let mut sound_system = self.sound_system.lock();
+            sound_system.wave_duty = self.gameboy.channel1_wave_pattern_duty();
+
+            let channel1_freq = 1.0 / (131072.0 / (2048 - self.gameboy.channel1_frequency()) as f32);
+            let old_phase = sound_system.phase;
+            sound_system.phase_inc =
+                old_phase * ((2 << (self.gameboy.channel1_sweep_shift())) as f32);
+            sound_system.phase = channel1_freq;
+//                (1.0 / (131072.0 / (2048 - self.gameboy.channel1_frequency()) as f32));
+            sound_system.add = self.gameboy.channel1_sweep_increase();
+            //            131072 / (2048 - gb)
+
+        }
+
         // 1ms before drawing in terms of CPU time we must throw a vblank interrupt
         // TODO make this variable based on whether it's GB, SGB, etc.
 
-        if ticks >= CPU_CYCLES_PER_VBLANK {
+        if (self.cycle_count - self.prev_time) >= CPU_CYCLES_PER_VBLANK {
             if let Some(ref mut dbg) = self.debugger {
                 dbg.step(&mut self.gameboy);
             }
@@ -447,7 +509,7 @@ impl ApplicationState {
             self.renderer.clear();
 
             // Draw all widgets
-            for ref mut widget in self.widgets.iter_mut() {
+            for ref mut widget in &mut self.widgets {
                 widget.draw(&mut self.renderer, &mut self.gameboy);
             }
 
@@ -460,23 +522,9 @@ impl ApplicationState {
             let record_screen = false;
             if record_screen {
                 save_screenshot(&self.renderer,
-                                format!("screen{:010}.bmp", self.screenshot_frame_num.0));
+                                format!("screen{:010}.bmp", self.screenshot_frame_num.0).as_ref());
                 self.screenshot_frame_num += Wrapping(1);
             }
-
-            if self.gameboy.get_sound1() {
-                self.sound_system.resume();
-            } else {
-                self.sound_system.pause();
-            }
-
-            let mut sound_system = self.sound_system.lock();
-            sound_system.wave_duty = self.gameboy.channel1_wave_pattern_duty();
-            sound_system.phase_inc = 1.0 /
-                                     (131072.0 / (2048 - self.gameboy.channel1_frequency()) as f32);
-            sound_system.add = self.gameboy.channel1_sweep_increase();
-            //            131072 / (2048 - gb)
-
 
             self.renderer.present();
 

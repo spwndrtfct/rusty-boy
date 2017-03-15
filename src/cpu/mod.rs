@@ -185,6 +185,12 @@ pub struct Cpu {
     pub pc:  MemAddr,
     pub mem: [byte; MEM_ARRAY_SIZE],
 
+    cartridge_type: Option<CartridgeType>,
+    /// Used to determine "which kind of MBC1 it is"
+    mbc_type: Option<MBCType>,
+
+    memory_banks: Vec<[byte; 0x4000]>,
+
     /// Whether or not the CPU is running, waiting for input, or stopped
     pub state: CpuState,
 
@@ -196,6 +202,7 @@ pub struct Cpu {
 
     /// TODO: document this
     pub cycles: CycleCount,
+    interrupt_next_inst: bool,
 }
 
 /// Used for save-states and reverting to old CPU on resets
@@ -213,11 +220,15 @@ impl Clone for Cpu {
                               ime: self.ime,
                               pc: self.pc,
                               mem: [0; MEM_ARRAY_SIZE],
+                              cartridge_type: None,
+                              mbc_type: None,
+                              memory_banks: vec![],
                               state: self.state,
                               input_state: self.input_state,
 
                               event_logger: self.event_logger.clone(),
-                              cycles: self.cycles};
+                              cycles: self.cycles,
+                              interrupt_next_inst: false};
 
         for i in 0..MEM_ARRAY_SIZE {
             new_cpu.mem[i] = self.mem[i];
@@ -243,11 +254,15 @@ impl Cpu {
             ime: true, // TODO verify initial
             pc:  0,
             mem: [0; MEM_ARRAY_SIZE],
+            cartridge_type: None,
+            mbc_type: None,
+            memory_banks: vec![],
             state: CpuState::Normal,
             input_state: 0xFF,
 
             event_logger: Some(DeqCpuEventLogger::new(None)),
             cycles: 0,
+            interrupt_next_inst: false,
         };
         /// The reset state is the default state of the CPU
         new_cpu.reset();
@@ -334,19 +349,20 @@ impl Cpu {
     ///
     /// This needs to be called 16384 (~16779 on SGB) times a second
     /// 
-    fn inc_div(&mut self) {
-        let old_val: MemAddr = (self.mem[0xFF04] as MemAddr) & 0xFF;
-        self.mem[0xFF04] = (old_val + 1) as byte;
+    pub fn inc_div(&mut self) {
+        let old_val = self.mem[0xFF04];
+        self.mem[0xFF04] = old_val.wrapping_add(1);
     }
 
     /// The speed at which the timer runs, settable by the program by
     /// writing to 0xFF07
-    pub fn timer_frequency(&self) -> u16 {
+    pub fn timer_frequency_hz(&self) -> u16 {
+        // NOTE these values differ for SGB
         match self.mem[0xFF07] & 0x3 {
-            0 => 4,
-            1 => 262,
-            2 => 65,
-            3 => 16,
+            0 => 4096,
+            1 => 262144,
+            2 => 65536,
+            3 => 16384,
             _ => unreachable!("The impossible happened!"),
         }
     }
@@ -543,8 +559,9 @@ impl Cpu {
         self.mem[0xFF05] =
             if old_val.wrapping_add(1) == 0 {
                 // on overflow...
-                if self.get_interrupts_enabled() {
-                    self.set_timer_interrupt_bit();
+                self.set_timer_interrupt_bit();
+                if self.state == CpuState::Halt {
+                    self.state = CpuState::Normal;
                 }
                 new_val
             } else {old_val.wrapping_add(1)};
@@ -593,12 +610,44 @@ impl Cpu {
     get_sound_on!(get_sound4, 0x8);
     get_sound_on!(get_sound_all, 0x80);
 
+    unset_sound_on!(unset_sound1_, 0x1u8);
+    unset_sound_on!(unset_sound2_, 0x2u8);
+    unset_sound_on!(unset_sound3_, 0x4u8);
+    unset_sound_on!(unset_sound4_, 0x8u8);
+    unset_sound_on!(unset_sound_all_, 0x80u8);
 
-    unset_sound_on!(unset_sound1, 0x1u8);
-    unset_sound_on!(unset_sound2, 0x2u8);
-    unset_sound_on!(unset_sound3, 0x4u8);
-    unset_sound_on!(unset_sound4, 0x8u8);
-    unset_sound_on!(unset_sound_all, 0x80u8);
+    /// FIXME: 0xFF26's lower 4 bits should be protected in set_mem
+    pub fn unset_sound1(&mut self) {
+        self.mem[0xFF26] &= !(1);
+        // on reset, clear value at 
+        self.mem[0xFF13] = 0;
+    }
+
+    pub fn unset_sound2(&mut self) {
+        self.mem[0xFF26] &= !(2);
+        // on reset, clear value at 
+//        self.mem[0xFF13] = 0;
+    }
+
+    pub fn unset_sound3(&mut self) {
+        self.mem[0xFF26] &= !(4);
+        // on reset, clear value at 
+        //self.mem[0xFF13] = 0;
+    }
+
+    pub fn unset_sound4(&mut self) {
+        self.mem[0xFF26] &= !(8);
+        // on reset, clear value at 
+        //self.mem[0xFF13] = 0;
+    }
+
+    pub fn unset_sound_all(&mut self) {
+        self.unset_sound1();
+        self.unset_sound2();
+        self.unset_sound3();
+        self.unset_sound4();
+        self.mem[0xFF26] &= !(0x80);
+    }
 
     set_interrupt_enabled!(set_vblank_interrupt_enabled, 0x1);
     set_interrupt_enabled!(set_lcdc_interrupt_enabled, 0x2);
@@ -748,11 +797,9 @@ impl Cpu {
         self.mem[0xFF44] = v as byte;
         // interrupt should only be thrown on the rising edge (when ly
         // turns to 144)
-        if v == 144 {
-            //TODO: verify that this should only be done if the interrupt is enabled
-            if self.get_interrupts_enabled() && self.get_vblank_interrupt_enabled() {
-                self.set_vblank_interrupt_bit();
-            }
+        //TODO: verify that this should only be done if the interrupt is enabled
+        if v == 144 && self.get_interrupts_enabled() && self.get_vblank_interrupt_enabled() {
+            self.set_vblank_interrupt_bit();
         }
         //LY check is done any time LY is updated
         self.lyc_compare();
@@ -870,6 +917,14 @@ impl Cpu {
         self.ime = true;
     }
 
+    /// Disables interrupts if the `interrupt_next_inst` flag is on
+    fn maybe_disable_interrupts(&mut self) {
+        if self.interrupt_next_inst {
+            self.disable_interrupts();
+            self.interrupt_next_inst = false;
+        }
+    }
+
     fn disable_interrupts(&mut self) {
         self.ime = false;
     }
@@ -976,17 +1031,42 @@ impl Cpu {
 
         let address = address as usize;
 
-        match address {
-            //TODO: Verify triple dot includes final value
-            v @ DISPLAY_RAM_START ... DISPLAY_RAM_END => {
-                // If in OAM and Display ram are both in use
-                if self.mem[STAT_ADDR] & 3 == 3 {
-                    error!("CPU cannot access address {} at this time", v);
-                } else {
-                    self.mem[v] = value as byte;
-                }
-            },
-            v @ OAM_START ... OAM_END => {
+        if let Some(cart_type) = self.cartridge_type {
+            match address {
+                0...0x7FFF if cart_type == CartridgeType::RomOnly
+                    || cart_type == CartridgeType::RomRam
+                    || cart_type == CartridgeType::RomRamBatt => {
+                        error!("Cannot write to ROM address {:X}", address);
+                    },
+                // NOTE: assuming this can only be set once
+                0x6000...0x7FFF if cart_type == CartridgeType::RomMBC1
+                    || cart_type == CartridgeType::RomMBC1Ram
+                    || cart_type == CartridgeType::RomMBC1RamBatt
+                    && self.mbc_type.is_none() => {
+                        let mbc_type = value & 1;
+                        if mbc_type == 1 {
+                            self.mbc_type = Some(MBCType::MBC1_4_32);
+                            debug!("Setting MBC1 type to 4-32");
+                        } else {
+                            self.mbc_type = Some(MBCType::MBC1_16_8);
+                            debug!("Setting MBC1 type to 16-8");
+                        }
+                    },
+                0x2000...0x3FFF if cart_type == CartridgeType::RomMBC1
+                    || cart_type == CartridgeType::RomMBC1Ram
+                    || cart_type == CartridgeType::RomMBC1RamBatt => {
+                        self.load_bank(value & 0x1F);
+                    },
+
+                v @ DISPLAY_RAM_START ... DISPLAY_RAM_END => {
+                    // If in OAM and Display ram are both in use
+                    if self.mem[STAT_ADDR] & 3 == 3 {
+                        error!("CPU cannot access address {} at this time", v);
+                    } else {
+                        self.mem[v] = value as byte;
+                    }
+                },
+                v @ OAM_START ... OAM_END => {
                 //if OAM is in use
                 match self.mem[STAT_ADDR] & 3 {
                     0b10 | 0b11 => {
@@ -1000,7 +1080,6 @@ impl Cpu {
                     self.mem[ad]                     = value;
                     self.mem[ad ^ (0xE000 - 0xC000)] = value;
                 },
-
             0xFF00 => {
                 // (P1) Joypad Info
                 if value & 0x10 == 0x10 {
@@ -1016,6 +1095,23 @@ impl Cpu {
             0xFF04 => self.mem[0xFF04] = 0,
             // TODO: Check whether vblank should be turned off on
             // writes to 0xFF44
+
+            // Sound
+            // NR52
+            0xFF26 => {
+                // NOTE: This currently ignores writes to any bit but the highest
+                // This is probably incorrect behavior
+                // The lowest 4 bits are documented as being read-only status bits
+                // but it's implied that they can be written to, just that it will not affect
+                // the logic.  Fixing this and emulating it completely will require keeping track
+                // of sound in a different place than NR 52
+                if (value >> 7) & 1 == 0 {
+                    self.unset_sound_all();
+                } else if (value >> 7) & 1 == 1 {
+                    self.set_sound_all();
+                }
+                
+            }
             0xFF44 => self.mem[0xFF44] = 0,
             0xFF45 => {
                 //LY check is done every time LY or LYC value is updated
@@ -1027,6 +1123,7 @@ impl Cpu {
                 self.dma();
             }
             n => self.mem[n] = value,
+            }
         }
     }
 
@@ -1061,6 +1158,33 @@ impl Cpu {
         } 
     }
 
+
+    fn load_bank(&mut self, bank_num: u8) {
+        if let Some(cart_type) = self.cartridge_type {
+            match cart_type {
+                CartridgeType::RomMBC1 |
+                CartridgeType::RomMBC1Ram |
+                CartridgeType::RomMBC1RamBatt => {
+                    let bn = if (bank_num & 0x1F) == 0 {1} else {bank_num & 0x1F} as usize;
+
+                    if self.memory_banks.len() <= (bn - 1) {
+                        error!("Tried to swap in memory bank {}, but only {} memory banks exist",
+                               bn - 1, self.memory_banks.len() - 1);
+                    } else {
+                        for i in 0x4000..0x8000 {
+                            self.mem[i] = self.memory_banks[bn - 1][i - 0x4000];
+                        }
+                    }
+                }
+                otherwise => {
+                    error!("No support/invalid request to swap in bank {} of cartridge type {:?}",
+                           bank_num, otherwise);
+                }
+            }        
+        } else { //could not find cartridge type
+            error!("No cartridge type specified! Cannot switch banks");
+        }
+    }
 
     fn ldnnn(&mut self, nn: CpuRegister, n: u8) {
         self.set_register(nn, n as byte);
@@ -1172,10 +1296,11 @@ impl Cpu {
     }
 
     fn ldhlspn(&mut self, n: i8) {
-        let val = add_u16_i8(self.sp, n as i8);
-        self.set_register16(CpuRegister16::HL, val as u16);
-
-        self.set_flags(false, false, false, false); //last two need to be checked; TODO:
+        let old_sp = self.sp;
+        self.addspn(n);
+        let new_sp = self.sp;
+        self.sp = old_sp;
+        self.set_register16(CpuRegister16::HL, new_sp);
     }
 
     fn ldnnsp(&mut self, b1: u8, b2: u8) {
@@ -1238,10 +1363,14 @@ impl Cpu {
     }
 
     fn addspn(&mut self, n: i8) {
-        let new_sp = add_u16_i8(self.sp, (n as i8));
+        let old_sp = self.sp;
+        let new_sp = add_u16_i8(self.sp, n);
         self.sp = new_sp as u16;
 
-        self.set_flags(false, false, false, false); //TODO: review last tw
+        self.set_flags(false,
+                       false,
+                       (((old_sp as i16) & 0xF) + ((n as i16) & 0xF) & 0xF0) != 0,
+                       ((((old_sp as i16) & 0xFF) + ((n as i16) & 0xFF)) & 0xF00) != 0);
     }
     
     fn add(&mut self, reg: CpuRegister) {
@@ -1279,26 +1408,26 @@ impl Cpu {
 
         self.set_flags(new_a == 0u8,
                        true,
-                       ((old_a & 0xF) as u8) >= ((old_b & 0xF) as u8),
+                       (((old_a & 0xF) - (old_b & 0xF)) & 0xF0) != 0,
 //                       (old_a & 0xF) >= (old_b & 0xF),
 //                       (old_a as i16) - (old_b as i16)
-                       old_b <= old_a);
+                       ((((old_a as i16) & 0xFF) - ((old_b as i16) & 0xFF)) & 0xFF00) != 0);
     }
 
     fn sbc(&mut self, reg: CpuRegister) {
         let old_a = self.a as i8;
-        let old_b = self.reg_or_const(reg);
-        let old_c = old_a.wrapping_sub(old_b) as byte;
-        let cf: byte = (self.f & HL) >> 5;
-        self.sub(reg);
+        let old_b = self.reg_or_const(reg) as i8;
+        let cf = ((self.f & CL) >> 4) as i8;
 
-        //NOTE: find out whether this should be self.a - cf
-        let new_a = self.a.wrapping_sub(cf); //overflow?
-        self.a = new_a as byte;
-        self.set_flags((new_a as byte) == 0u8,
+        let new_a = old_a.wrapping_sub(old_b).wrapping_sub(cf) as u8; 
+        self.a = new_a;
+
+        self.set_flags(new_a == 0u8,
                        true,
-                       (old_c & 0xF) >= cf,
-                       cf <= old_c);
+                       (((old_a & 0xF) - ((old_b & 0xF) + cf)) & 0xF0) != 0,
+//                       (old_a & 0xF) >= (old_b & 0xF),
+//                       (old_a as i16) - (old_b as i16)
+                       ((((old_a as i16) & 0xFF) - (((old_b as i16)  & 0xFF) + (cf as i16))) & 0xFF00) != 0);
     }
 
     fn and(&mut self, reg: CpuRegister) {
@@ -1324,25 +1453,8 @@ impl Cpu {
 
     fn cp(&mut self, reg: CpuRegister) {
         let old_a = self.a;
-        let regval =
-            if let CpuRegister::Num(n) = reg { 
-                n
-            } else if let Some(n) = self.access_register(reg) {
-                n
-            } else {unreachable!()};
-        
-
-        let a4bit = old_a & 0xF;
-        let reg4bit = regval & 0xF;
-            
         self.sub(reg);
-        let hcf = (self.f & HL) == HL;
         self.a = old_a;
-        self.set_flags(old_a == regval,
-                       true,
-                       !hcf,
-                  //     !(reg4bit > a4bit),
-                       (old_a as i8) < (regval as i8));
     }
 
     fn inc(&mut self, reg: CpuRegister) {
@@ -1362,16 +1474,16 @@ impl Cpu {
     fn dec(&mut self, reg: CpuRegister) {
         let old_c = (self.f & CL) == CL;
 
-        let reg_val: i16 = (self.access_register(reg)
-                            .expect("invalid register") as i16) & 0xFF;
+        let reg_val = self.access_register(reg)
+                            .expect("invalid register");
 
-        let new_val:byte = (reg_val - 1) as byte;
+        let new_val:byte = reg_val.wrapping_sub(1) as byte;
         self.set_register(reg, new_val);
 
         self.set_flags(
             new_val == 0u8,
             true,
-            (reg_val & 0xF) != 0, //TODO: review 
+            ((reg_val & 0xF).wrapping_sub(1) & 0xF0) != 0,
             old_c);
 
     }
@@ -1475,22 +1587,34 @@ impl Cpu {
 
 
     fn daa(&mut self) {
-        let reduced_a = (self.a as u16) & 0xFF;
+        let nf = self.f & NLV == NLV;
+        let hf = self.f & HL == HL;
+        let cf = self.f & CL == CL;
 
-        let lowest_bits = reduced_a & 0xF;
-
-        let lowest_digit = if lowest_bits > 9 {(lowest_bits + 6) & 0xF} else {lowest_bits};
-        let highest_bits = ((reduced_a & 0xF0) + (if lowest_digit == lowest_bits {0} else {0x10})) & 0xF0;
-        let highest_digit = if highest_bits > 0x90 {(highest_bits + 0x60) & 0xF0} else {highest_bits & 0xF0};
-
-        let new_a: byte = (highest_digit | lowest_digit) as byte;
-        self.a = new_a;
-        let old_nflag = (self.f & NLV) == NLV;
-        self.set_flags(new_a == 0u8,
-                       old_nflag,
+        let mut new_cf = cf;
+        
+        if !nf {
+            if cf || self.a > 0x99 {
+                self.a = self.a.wrapping_add(0x60);
+                new_cf = true;
+            }
+            if hf || (self.a & 0xF) > 0x9 {
+                self.a = self.a.wrapping_add(0x06);
+            }
+        } else {
+            if cf {
+                self.a = self.a.wrapping_sub(0x60);
+            }
+            if hf {
+                self.a = self.a.wrapping_sub(0x06);
+            }
+        }
+        
+        let new_a = self.a;
+        self.set_flags(new_a == 0,
+                       nf, // unchanged
                        false,
-                       lowest_bits != lowest_digit || highest_bits != highest_digit);
-                       //0x99 < reduced_a); //NOTE: weird documentation, unclear value
+                       new_cf);
     }
 
     fn cpl(&mut self) {
@@ -1527,7 +1651,7 @@ impl Cpu {
     }
 
     fn di(&mut self) {
-        self.disable_interrupts();
+        self.interrupt_next_inst = true;
     }
 
     fn ei(&mut self) {
@@ -1540,7 +1664,7 @@ impl Cpu {
         let new_a = (self.a << 1) | old_bit7;
         self.a = new_a;
 
-        self.set_flags(new_a == 0u8,
+        self.set_flags(false,
                        false,
                        false,
                        old_bit7 == 1);
@@ -1548,13 +1672,13 @@ impl Cpu {
 
     fn rla(&mut self) {
         let old_bit7 = (self.a >> 7) & 1;
-        let old_flags = ((self.f & CL) >> 4) & 0xF;
+        let old_flags = ((self.f & CL) >> 4) & 0x1;
         
 
         let new_a = (self.a << 1) | old_flags;
         self.a = new_a;
 
-        self.set_flags(new_a == 0u8,
+        self.set_flags(false,
                        false,
                        false,
                        old_bit7 == 1);       
@@ -1566,7 +1690,7 @@ impl Cpu {
         let new_a = ((self.a >> 1) & 0x7F) | (old_bit0 << 7);
         self.a = new_a;
 
-        self.set_flags(new_a == 0u8,
+        self.set_flags(false,
                        false,
                        false,
                        old_bit0 == 1);
@@ -1579,7 +1703,7 @@ impl Cpu {
         let new_a = ((self.a >> 1) & 0x7F) | (old_flags << 7);
         self.a = new_a;
 
-        self.set_flags(new_a == 0u8,
+        self.set_flags(false,
                        false,
                        false,
                        old_bit0 == 1);
@@ -1942,19 +2066,13 @@ impl Cpu {
         self.handle_interrupts();
         
         let mut inst_time = 4;
-        let (first_byte, second_byte, third_byte, _) //TODO: verify no 32bit instructions
+        let (first_byte, second_byte, third_byte, _)
             = self.read_instruction();
         let x = (first_byte >> 6) & 0x3;
         let y = (first_byte >> 3) & 0x7;
         let z = first_byte        & 0x7;
 
-        {
-            let cur_pc = self.pc;
-            if let Some(ref mut logger) = self.event_logger {
-                logger.log_exec(self.cycles, cur_pc);
-            }
-        }
-
+        
         //First check if CPU is in a running state
         if self.state == CpuState::Halt {
             //TODO: Needs extra handling with interupts
@@ -1962,6 +2080,13 @@ impl Cpu {
         } else if self.state == CpuState::Stop {
             return inst_time; //unsure of this
         } //otherwise it's in normal state:
+
+        {
+            let cur_pc = self.pc;
+            if let Some(ref mut logger) = self.event_logger {
+                logger.log_exec(self.cycles, cur_pc);
+            }
+        }
 
         trace!("REG: A:{:02X} B:{:02X} C:{:02X} D:{:02X} E:{:02X} H:{:02X} L:{:02X} SP:{:04X} Z:{} N:{} H:{} C:{} (SP):{:02X}{:02X} (HL):{:02X}",
                self.a, self.b, self.c, self.d, self.e, self.h, self.l, self.sp,
@@ -2318,6 +2443,7 @@ impl Cpu {
         self.inc_pc();
 
         self.cycles = (Wrapping(self.cycles) + Wrapping(inst_time as u64)).0;
+        self.maybe_disable_interrupts();
         
         inst_time
     }
@@ -2336,12 +2462,51 @@ impl Cpu {
 
         rom.read(&mut rom_buffer).unwrap();
 
+        if let Some(cart_type) = to_cartridge_type(rom_buffer[0x147]) {
+            self.reinit_logger();
 
-        for i in 0..0x8000 {
-            self.mem[i] = rom_buffer[i] as byte;
+            match cart_type {
+                //TODO: verify this
+                CartridgeType::RomOnly |
+                CartridgeType::RomRam |
+                CartridgeType::RomRamBatt => {
+                    for i in 0..0x8000 {
+                        self.mem[i] = rom_buffer[i] as byte;
+                    }
+                }
+                CartridgeType::RomMBC1 |
+                CartridgeType::RomMBC1Ram |
+                CartridgeType::RomMBC1RamBatt => {
+                    // For MBC1, defaults to loading ROM bank 0 
+                    for i in 0..0x4000 {
+                        self.mem[i] = rom_buffer[i] as byte;
+                    }
+
+                    let mut mem_bank = [0u8; 0x4000];
+                    // and rom bank 1 into their respective places
+                    for i in 0x4000..0x8000 {
+                        self.mem[i] = rom_buffer[i] as byte;
+                        mem_bank[i - 0x4000] = rom_buffer[i] as byte;
+                    }
+                    self.memory_banks.push(mem_bank);
+
+                    //NOTE: possible bug here because temp buffer (mem_bank) is not cleared
+                    while if let Ok(n) = rom.read(&mut rom_buffer) {n > 0} else {false} {
+                        for i in 0..0x4000 {
+                            mem_bank[i] = rom_buffer[i] as byte;
+                        }
+                        self.memory_banks.push(mem_bank);
+                    }
+                }
+                otherwise => {
+                    error!("Cartridge type {:?} is not supported!", cart_type);
+                }
+                
+            }
+        self.cartridge_type = Some(cart_type);
+        } else { // to_cartridge_type failed
+            error!("Could not find a cartridge type!");
         }
-
-        self.reinit_logger();
     }
 }
 

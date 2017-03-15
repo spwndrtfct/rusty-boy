@@ -8,6 +8,7 @@ use std;
 use sdl2::*;
 use sdl2::audio::AudioDevice;
 use sdl2::keyboard::Keycode;
+use sdl2::keyboard;
 use log4rs;
 
 use debugger::graphics::*;
@@ -55,6 +56,7 @@ pub struct ApplicationState {
     widgets: Vec<PositionedFrame>,
     timer_subsystem: sdl2::TimerSubsystem,
     fps_counter: FpsCounter,
+    rom_file_name: String,
 }
 
 /// Number of frame times to get average fps for
@@ -239,6 +241,7 @@ impl ApplicationState {
             widgets: widgets,
             timer_subsystem: timer_subsystem,
             fps_counter: FpsCounter::new(freq, initial_time),
+            rom_file_name: rom_file_name.to_string(),
         }
     }
 
@@ -325,7 +328,7 @@ impl ApplicationState {
                     info!("Program exiting!");
                     std::process::exit(0);
                 }
-                Event::KeyDown { keycode: Some(keycode), repeat, .. } => {
+                Event::KeyDown { keycode: Some(keycode), repeat, keymod, .. } => {
                     if !repeat {
                         match keycode {
                             Keycode::Escape => {
@@ -335,17 +338,20 @@ impl ApplicationState {
                             Keycode::F3 => self.gameboy.toggle_logger(),
                             Keycode::R => {
                                 // Reset/reload emu
-                                // TODO Keep previous visualization settings
-                                self.gameboy.reset();
-                                let gbcopy = self.initial_gameboy_state.clone();
-                                self.gameboy = gbcopy;
-                                self.gameboy.reinit_logger();
-
-                                // // This way makes it possible to edit rom
-                                // // with external editor and see changes
-                                // // instantly.
-                                // gameboy = Cpu::new();
-                                // gameboy.load_rom(rom_file);
+                                if keymod.intersects(sdl2::keyboard::LSHIFTMOD|sdl2::keyboard::RSHIFTMOD) {
+                                    // This way makes it possible to edit rom
+                                    // with external editor and see changes
+                                    // instantly.
+                                    info!("Real reset for real men.");
+                                    self.gameboy = cpu::Cpu::new();
+                                    self.gameboy.load_rom(self.rom_file_name.as_ref());
+                                } else {                                    
+                                    // TODO Keep previous visualization settings
+                                    self.gameboy.reset();
+                                    let gbcopy = self.initial_gameboy_state.clone();
+                                    self.gameboy = gbcopy;
+                                    self.gameboy.reinit_logger();
+                                }
                             }
                             Keycode::A => self.gameboy.press_a(),
                             Keycode::S => self.gameboy.press_b(),

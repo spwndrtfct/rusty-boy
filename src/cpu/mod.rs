@@ -442,7 +442,8 @@ impl Cpu {
     }
     
     pub fn channel1_sound_length(&self) -> u8 {
-        (self.mem[0xFF11] & 0x3F) as u8
+        //(self.mem[0xFF11] & 0x07) as u8 // accroding to gbsound3.pdf
+        (self.mem[0xFF11] & 0x1F) as u8
     }
         
     pub fn channel1_envelope_initial_volume(&self) -> u8 {
@@ -464,8 +465,7 @@ impl Cpu {
     }
     
     pub fn channel1_counter_consecutive_selection(&self) -> bool {
-        //TODO:
-        false
+        ((self.mem[0xFF14] >> 6) & 1) == 1
     }
     
     pub fn channel1_restart_sound(&self) -> bool {
@@ -478,7 +478,8 @@ impl Cpu {
     }
     
     pub fn channel2_sound_length(&self) -> u8 {
-        (self.mem[0xFF16] & 0x3F) as u8
+        //(self.mem[0xFF16] & 0x07) as u8 // according to gbsound3.pdf
+        (self.mem[0xFF11] & 0x1F) as u8
     }
     
     pub fn channel2_envelope_initial_volume(&self) -> u8 {
@@ -499,11 +500,10 @@ impl Cpu {
             
             byte_to_u16(lower, higher)
         }
-        
-        pub fn channel2_counter_consecutive_selection(&self) -> bool {
-            //TODO:
-            false
-        }
+
+    pub fn channel2_counter_consecutive_selection(&self) -> bool {
+        ((self.mem[0xFF19] >> 6) & 1) == 1
+    }
 
         pub fn channel2_restart_sound(&self) -> bool {
             ((self.mem[0xFF19] >> 7) & 1) == 1

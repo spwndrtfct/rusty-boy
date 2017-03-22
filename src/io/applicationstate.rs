@@ -407,12 +407,13 @@ impl ApplicationState {
             Err(_) => error!("Could not set render scale"),
         }
 
-        let sound_upper_limit =
-            ((CPU_CYCLES_PER_SECOND as f32) / self.gameboy.channel1_sweep_time()) as u64;
+        // let sound_upper_limit = 100;  // FIXME This is wrong, maybe trigger sound update/generation by changes in sound special registers?
+        //let sound_upper_limit = ((CPU_CYCLES_PER_SECOND as f32) / self.gameboy.channel1_sweep_time()) as u64;
+        // self.sound_cycles += current_op_time;
+        // if self.sound_cycles >= sound_upper_limit {
+        //     self.sound_cycles -= sound_upper_limit;
 
-        if self.sound_cycles >= sound_upper_limit {
-            self.sound_cycles -= sound_upper_limit;
-            
+        if true {
             if self.gameboy.get_sound1() || self.gameboy.get_sound2() {
                 self.sound_system.resume();
             } else {
@@ -420,14 +421,38 @@ impl ApplicationState {
             }
 
             let mut sound_system = self.sound_system.lock();
-            // TODO move this to channel.update() or something
-            sound_system.channel1.wave_duty = self.gameboy.channel1_wave_pattern_duty();
-            let channel1_freq = 4194304.0 / (4.0 * 8.0 * (2048.0 - self.gameboy.channel1_frequency() as f32));
-            sound_system.channel1.phase_inc = channel1_freq / sound_system.out_freq;
 
-            //sound_system.channel2.wave_duty = self.gameboy.channel2_wave_pattern_duty();
-            let channel2_freq = 4194304.0 / (4.0 * 8.0 * (2048.0 - self.gameboy.channel2_frequency() as f32));
-            sound_system.channel2.phase_inc = channel2_freq / sound_system.out_freq;
+            if true || self.gameboy.get_sound1() { // FIXME this does not seem to work
+                // TODO move this to channel.update() or something
+                sound_system.channel1.wave_duty = self.gameboy.channel1_wave_pattern_duty();
+                let channel1_freq = CPU_CYCLES_PER_SECOND as f32 / (4.0 * 8.0 * (2048.0 - self.gameboy.channel1_frequency() as f32));
+                sound_system.channel1.phase_inc = channel1_freq / sound_system.out_freq;
+                sound_system.channel1.consec = !self.gameboy.channel1_counter_consecutive_selection();
+                if self.gameboy.channel1_restart_sound() {
+                    sound_system.channel1.length = (sound_system.out_freq / 256.0) as u64 * (64 - self.gameboy.channel1_sound_length() as u64); // NOTE this is different for channel 2
+                self.gameboy.mem[0xFF14] &= self.gameboy.mem[0xFF14] & !(1 << 7);
+                };
+            } else {
+                // TODO some other way to disable sound
+                sound_system.channel1.consec = false;
+                sound_system.channel1.length = 0;
+            };
+            
+
+            if true || self.gameboy.get_sound2() { // FIXME this does not seem to work
+                //sound_system.channel2.wave_duty = self.gameboy.channel2_wave_pattern_duty();
+                let channel2_freq = CPU_CYCLES_PER_SECOND as f32 / (4.0 * 8.0 * (2048.0 - self.gameboy.channel2_frequency() as f32));
+                sound_system.channel2.phase_inc = channel2_freq / sound_system.out_freq;
+                sound_system.channel2.consec = !self.gameboy.channel2_counter_consecutive_selection();
+                if self.gameboy.channel2_restart_sound() {
+                    sound_system.channel2.length = (sound_system.out_freq / 256.0) as u64 * (256 - self.gameboy.channel2_sound_length() as u64); // NOTE the scale is different from channel 1!
+                    self.gameboy.mem[0xFF19] &= self.gameboy.mem[0xFF19] & !(1 << 7);
+                };
+            } else {
+                // TODO some other way to disable sound
+                sound_system.channel2.consec = false;
+                sound_system.channel2.length = 0;
+            };
 
         }
 

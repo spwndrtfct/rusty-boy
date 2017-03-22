@@ -29,6 +29,11 @@ pub struct SquareWave {
 
     /// A flag indicating the direction the phase will be changed
     pub add: bool,
+
+    /// Length
+    pub length: u64,
+
+    pub consec: bool,
 }
 
 trait SoundChannel {
@@ -37,13 +42,21 @@ trait SoundChannel {
 
 impl SoundChannel for SquareWave {
     fn generate_sample(&mut self) -> f32 {
-        let out = if self.phase <= self.wave_duty {
-            self.volume
+        if self.consec || self.length > 0 {
+            let out = if self.phase <= self.wave_duty {
+                self.volume
+            } else {
+                -self.volume
+            };
+            self.phase = (self.phase + self.phase_inc) % 1.0;
+            if !self.consec {
+                self.length -= 1;
+            }
+            out
         } else {
-            -self.volume
-        };
-        self.phase = (self.phase + self.phase_inc) % 1.0;
-        out
+            // TODO reset NR52 for channel1 when length runs out
+            0.0
+        }
     }
 }
 
@@ -86,6 +99,8 @@ pub fn setup_audio(sdl_context: &sdl2::Sdl) -> AudioDevice<GBSound> {
                 volume: 0.025,
                 wave_duty: 0.25,
                 add: true,
+                length: 0,
+                consec: false,
             },
             channel2: SquareWave {
                 phase_inc: 440.0 / spec.freq as f32,
@@ -93,6 +108,8 @@ pub fn setup_audio(sdl_context: &sdl2::Sdl) -> AudioDevice<GBSound> {
                 volume: 0.025,
                 wave_duty: 0.25,
                 add: true,
+                length: 0,
+                consec: false,
             }
 
         }
